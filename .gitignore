@@ -1,0 +1,6 @@
+.env
+*.pyc
+test.rest
+authorities.db
+data/
+.venv/
