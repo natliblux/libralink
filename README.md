@@ -2,25 +2,46 @@
 
 ![Status](https://img.shields.io/badge/status-work_in_progress-orange)
 
-LibraLink preprocesses **MARC 21 authority records** and provides a REST API for finding and retrieving authorities. It is divided in to two components:
+<p align="left">
+  <img src="assets/logo.png" alt="LibraLink logo" width="400">
+</p>
 
-1. **Preprocessing** — reads MARCXML, builds a SQLite3 database, and optionally exports to Elasticsearch or JSONL.
-2. **API** — searches the authority database and retrieves authorities by identifier.
+LibraLink processes **MARC 21 authority records** and provides a REST API for finding and retrieving authorities. It consists of two components:
+
+* **[Indexing](#indexing)** - Reads MARCXML, builds a SQLite database, and optionally exports to Elasticsearch or JSONL.
+* **[API](#api)** -  Searches the authority database and retrieves authorities by identifier.
 
 ## Table of contents
 
-- [Installation](#installation)
-- [Preprocessing](#preprocessing)
-  - [Example](#Example)
+- [Setup](#setup)
+  - [Terminology](#terminology)
+  - [Installation](#installation)
+  - [Normalizer](#normalizer)
+  - [Identifier](#identifier)
+- [Indexing](#indexing)
+  - [CLI](#cli)
   - [Arguments](#arguments)
-  - [Record Processing](#record-processing)
+  - [Logic](#logic)
 - [API](#api)
   - [Startup](#startup)
-  - [POST /lookup](#post-lookup)
+  - [POST /identifier](#post-identifier)
   - [POST /search](#post-search)
   - [Linking](#linking)
 
-## Installation
+## Setup
+
+### Terminology
+
+* **Preferred heading**  
+The authorized form of a name, typically stored in MARC fields such as `100` or `110`.
+
+* **Variant heading**  
+An alternative form of a name, typically stored in MARC fields such as `400` or `410`.
+
+* **Authority identifier**  
+A unique identifier associated with an authority record, extracted by LibraLink from `035 $a`.
+
+### Installation
 
 LibraLink requires **Python 3.12+** and a MARCXML authority file. To install the required dependencies:
 
@@ -28,7 +49,7 @@ LibraLink requires **Python 3.12+** and a MARCXML authority file. To install the
 pip install -r requirements.txt
 ```
 
-Copy the example configuration and adjust the required `.env` file (used by preprocessing and API)
+A configuration file named `.env` **must** exist at the project root and is shared by both indexing and the API. Copy the example (`.env.example`) and adjust it accordingly:
 
 ```bash
 cp .env.example .env
@@ -44,61 +65,59 @@ AUTH_IDENTIFIER=(LUBIBNET)
 
 ### Normalizer
 
-An arbitrary `normalize(text: str) -> str` function can be introduced within `src/normalization/` and used throughout the project. The variable defaults to `default`, which removes bracketed content, spaces and converts text to lowercase. Changing the normalizer requires rerunning preprocessing.
+A custom `normalize(text: str) -> str` function can be implemented in a custom module under `src/normalization/`. Those normalization rules are applied throughout LibraLink (indexing and API). `AUTH_NORMALIZER` defaults to `default`, which removes bracketed content (`[]`, `()`, `{}`), spaces, and angle brackets (`<>`), then converts the text to lowercase. Changing the normalizer requires rerunning indexing to rebuild the database.
 
 ### Identifier
 
-The prefix used to select an authority identifier from all available 035$a subfields. If empty or omitted, the first nonempty 035$a subfield is used. Changing the prefix requires rerunning preprocessing.
+The prefix used to select an authority identifier from potentially multiple `035 $a` subfields. If `AUTH_IDENTIFIER` is left empty or is omitted, the first nonempty `035 $a` subfield is picked automatically. Changing the prefix requires rerunning indexing to rebuild the database.
 
-## Preprocessing
+## Indexing
 
-Preprocessing extracts preferred and variant headings from MARCXML and stores searchable entries in a **SQLite3 database**. The database file and table are configured by `DB_FILE` and `TABLE_NAME` in `src/constants.py`. Elasticsearch and JSONL outputs are optional; neither is needed to run the API.
+Indexing extracts preferred and variant headings from MARCXML and stores searchable entries in a SQLite database. The data can also optionally be made available to Elasticsearch and as a JSONL output (both not required to run the API). 
 
-### Running preprocessing
+### CLI
 
-For example, import personal authorities (`100` / `400`) and then corporate authorities (`110` / `410`) into the same database:
+Run `src/indexer.py` to import data into the database. For example, a two-step import for personal authorities (`100 & 400`), followed by corporate authorities (`110 & 410`).
 
 ```bash
-python3 src/preproc.py --xml data/persons.xml --type person --preferred 100 --variants 400 --clear
-python3 src/preproc.py --xml data/entities.xml --type corporate --preferred 110 --variants 410
+python3 src/indexer.py --xml authorities.xml --type person --preferred 100 --variants 400 --clear
+python3 src/indexer.py --xml authorities.xml --type corporate --preferred 110 --variants 410
 ```
 
-The first command clears the existing authority table; the second adds another authority type **without** clearing it. The `--type` values are labels you choose and must match the `type` supplied to `/search`.
+The first command clears the database, the second adds another authority type without clearing it. The `--type` values can be chosen freely and will later be used as filters for the API.
 
 ### Arguments
 
 | Short | Long | Required | Description |
 | --- | --- | --- | --- |
-| `-x` | `--xml` | Yes | Input MARCXML file path. |
+| `-x` | `--xml` | Yes | Input MARCXML file path, e.g. `authorities.xml`. |
 | `-t` | `--type` | Yes | Authority type label stored in the database, e.g. `person` or `corporate`. |
 | `-p` | `--preferred` | Yes | Three-digit MARC tag for the preferred heading, e.g. `100` or `110`. |
-| `-v` | `--variants` | Yes | Three-digit MARC tag for variant headings, e.g. `400` or `410`. |
-| `-e` | `--elastic` | No | Elasticsearch URL **including index**, e.g. `http://localhost:9200/authorities`. Indexes generated entries in addition to SQLite. |
-| `-j` | `--jsonl` | No | Optional JSONL output path. Adds `.jsonl` if missing; writes one JSON object per entry. Appends unless `--clear` is used. |
-| `-c` | `--clear` | No | Drops and recreates the SQLite authority table before importing. Also clears the specified Elasticsearch index and overwrites the specified JSONL file. **Destructive; use with care.** |
+| `-v` | `--variants` | Yes | Three-digit MARC tag for the variant headings, e.g. `400` or `410`. |
+| `-e` | `--elastic` | No | Optional Elasticsearch URL including index, e.g. `http://localhost:9200/authorities`. |
+| `-j` | `--jsonl` | No | Optional JSONL output path, e.g. `authorities.jsonl`. |
+| `-c` | `--clear` | No | Clears/resets the database and, if provided, the Elasticsearch index and JSONL file. |
 
-Normalizer and identifier settings come from `.env`, **not** CLI arguments.
+The **normalizer** and **identifier** settings come from the `.env` file and are not part of the CLI.
 
-### Record Processing
+### Logic
 
-For each MARCXML authority record, preprocessing:
+For each MARCXML authority record, indexing:
 
-1. Reads the first preferred heading (requires a nonempty `$a`), its `$b` subfields, `$d` text (`years`), and indicators.
-2. Selects an authority identifier from `035$a` according to `AUTH_IDENTIFIER`. Records without a suitable identifier are skipped.
+1. Reads the first preferred heading (requires a nonempty `$a`), the corresponding `$b` and `$d` subfields and the indicators.
+2. Selects an authority identifier from `035$a` according to `AUTH_IDENTIFIER` (records without a suitable identifier are skipped entirely).
 3. Creates a searchable entry for each occurrence of the variant field, preserving `$a` and all `$b` values.
 4. Adds the preferred heading as a searchable variant if it is not already among the variants.
-5. Stores original and normalized text, including combined headings and individual `$a` and `$b` representations.
+5. Stores original and normalized text (according to `AUTH_NORMALIZER`), including combined headings and individual `$a` and `$b` representations.
 
 An authority can occupy multiple database rows, but all its entries share one authority identifier. Imports without `--clear` replace rows with matching entry IDs but do not necessarily remove obsolete rows from earlier imports.
 
 ## API
 
-The API reads the preprocessed SQLite3 database and exposes two JSON endpoints:
+The API reads the indexed SQLite database and exposes two JSON endpoints:
 
-- **`POST /identifier`** — retrieve an authority by identifier.
-- **`POST /search`** — find authorities by heading text, with selectable search fields.
-
-Interactive OpenAPI documentation is available at `/docs` after startup.
+- **`POST /identifier`** - retrieve an authority by identifier.
+- **`POST /search`** - find authorities by heading text, with selectable search fields.
 
 ### Startup
 
@@ -108,10 +127,10 @@ From the project root:
 python3 src/api.py
 ```
 
-For production, the application can be served with Gunicorn under Supervisor. Run Gunicorn with `src` as the working directory so local imports resolve:
+For production, the application can be served with Gunicorn under Supervisor. Run Gunicorn with `src` as the working directory:
 
 ```bash
-gunicorn --chdir src api:app -k uvicorn.workers.UvicornWorker -w 4 -b 127.0.0.1:8000
+gunicorn --chdir /absolute/path/to/libralink/src api:app -k uvicorn_worker.UvicornWorker -w 4 -b 127.0.0.1:8000
 ```
 
 ### `POST /identifier`
@@ -122,7 +141,7 @@ Retrieves authorities by identifier.
 
 ```json
 {
-  "identifier": "000000715"
+  "identifier": "000055066"
 }
 ```
 
@@ -130,7 +149,7 @@ Retrieves authorities by identifier.
 | --- | --- | --- |
 | `identifier` | string (required) | Full or unprefixed authority identifier. |
 
-The API first tries the identifier exactly as supplied. If no result is found and `AUTH_IDENTIFIER` is configured, it tries prepending that prefix (unless already present). For example, `000000715` and `(LUBIBNET)000000715` can identify the same authority.
+The API first tries the identifier exactly as provided. If no result is found and `AUTH_IDENTIFIER` is configured, it tries prepending that prefix (unless already present). For example, `000055066` and `(LUBIBNET)000055066` can identify the same authority.
 
 **Response when found:**
 
@@ -139,16 +158,18 @@ The API first tries the identifier exactly as supplied. If no result is found an
   "autType": "person",
   "ind1": "1",
   "ind2": "#",
-  "authority": "(LUBIBNET)000000715",
-  "years": "1823-1891",
-  "preferred": "La Fontaine, Edmond de",
-  "preferredA": "La Fontaine, Edmond de",
+  "authority": "(LUBIBNET)000055066",
+  "years": "1932-2005",
+  "preferred": "Gaul, Charly",
+  "preferredA": "Gaul, Charly",
   "preferredB_list": [],
   "preferredB": ""
 }
 ```
 
-**Response when not found:** `[]`.
+**Response when not found:** `[]`
+
+The `preferred` field contains the complete preferred heading, while `preferredA` contains only `$a`. The `preferredB_list` field contains all `$b` subfields as a list, whereas `preferredB` contains only the first `$b` value (or an empty string if none exists).
 
 ### `POST /search`
 
@@ -158,19 +179,19 @@ Searches authority headings in the requested fields and returns distinct matchin
 
 ```json
 {
-  "type": "person",
-  "text": "Dicks",
-  "fields": ["variant", "variantA"],
-  "normalize": true
+    "type": "corporate",
+    "text": "european parliament",
+    "fields": ["variant", "variantA", "variantB"],
+    "normalize": true
 }
 ```
 
 | Parameter | Type | Description |
 | --- | --- | --- |
-| `type` | string (required) | Authority type label used with preprocessing `--type`. |
+| `type` | string (required) | Authority type label that was used with indexing `--type`. |
 | `text` | string (required) | Text to search for. |
-| `fields` | array of strings (required) | Search fields, evaluated in the specified order. Invalid or repeated values are ignored. |
-| `normalize` | boolean (optional) | Also search normalized values; defaults to `false`. |
+| `fields` | list of strings (required) | List of search fields to be used. |
+| `normalize` | boolean (optional) | Also search normalized values, defaults to `false`. |
 
 **Searchable fields**
 
@@ -178,11 +199,11 @@ Searches authority headings in the requested fields and returns distinct matchin
 | --- | --- |
 | `variant` | `$a` followed by all `$b` values. |
 | `variantA` | `$a` only. |
-| `variantB` | `$b` only. |
+| `variantB` | the first `$b` only. |
 
-The preferred heading is searchable too: preprocessing adds it as a variant when needed. With `"normalize": true`, the API additionally searches `variantNorm`, `variantANorm`, and/or `variantBNorm`, corresponding to the requested fields.
+The preferred heading is automatically searchable since it is included as a variant during indexing. With `"normalize": true`, the API additionally searches `variantNorm`, `variantANorm`, and/or `variantBNorm`, corresponding to the requested fields.
 
-The API performs **exact searches first**, in field order, followed by normalized searches when enabled. Results are deduplicated by authority identifier, preserving the first match. The `unique` flag means only one distinct authority matched—not that the match is necessarily correct.
+The API searches all requested fields (requiring exact matching), including their normalized counterparts when `normalize=true`. Results are combined and deduplicated by authority identifier. The `unique` flag indicates that exactly one distinct authority matched, which can be a useful signal when determining the intended real-world entity.
 
 **Response with one match**
 
@@ -190,24 +211,39 @@ The API performs **exact searches first**, in field order, followed by normalize
 {
   "unique": true,
   "results": 1,
-  "data": [
+  "authorities": [
     {
-      "autType": "person",
-      "ind1": "1",
+      "autType": "corporate",
+      "ind1": "#",
       "ind2": "#",
-      "authority": "(LUBIBNET)000000715",
-      "years": "1823-1891",
-      "preferred": "La Fontaine, Edmond de",
-      "preferredA": "La Fontaine, Edmond de",
-      "preferredB_list": [],
-      "preferredB": ""
+      "authority": "(LUBIBNET)000002524",
+      "preferred": "Communautés européennes Parlement européen",
+      "preferredA": "Communautés européennes",
+      "preferredB_list": [
+        "Parlement européen"
+      ],
+      "preferredB": "Parlement européen"
     }
   ]
 }
 ```
 
-**Response with no matches:** `{"results": 0}`. With multiple matches, `unique` is `false`, `results` gives the number of distinct authorities, and `data` contains one object per authority.
+**Response with no matches:**  
+`{"results": 0}`
+
+**Response with multiple matches:**  
+When multiple authorities match, `unique` is `false`.
 
 ### Linking
 
-`/search` returns candidates; **it does not select/link the correct authority**. Clients can implement their own matching or linking strategies by selecting which fields to search, choosing whether to normalize, and evaluating the number of matches returned. The API supplies the building blocks, the client controls the decision logic.
+The `/search` endpoint returns candidate authorities without deciding which one should be linked. Clients can implement their own linking strategies using the available search fields, normalization options, and match counts.
+
+#### Example: BnL Linking Strategy
+
+The BnL, for example, currently uses a conservative three-step linking strategy designed to minimize false links:
+
+1. **Exact match**: Search the combined `$a` and first `$b` using `fields=["variant"]` and `normalize=false`. Link if exactly one authority matches.
+2. **Disambiguation**: If multiple authorities match, search `$a` using `fields=["variantA"]` and `normalize=false`. Link if the intersection with the initial Step 1 results contains exactly one authority.
+3. **Normalized match**: If the initial search returns no matches, repeat Step 1 with `normalize=true`. Link if exactly one authority matches.
+
+If no unique match is established, the record remains unlinked. Steps 2 and 3 are mutually exclusive.
