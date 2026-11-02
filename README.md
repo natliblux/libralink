@@ -43,7 +43,13 @@ A unique identifier associated with an authority record, extracted by LibraLink 
 
 ### Installation
 
-LibraLink requires **Python 3.12+** and a MARCXML authority file. To install the required dependencies:
+LibraLink requires **Python 3.12+** and a MARCXML authority file. Using a virtual environment is recommended:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+```
+To install the required dependencies:
 
 ```bash
 pip install -r requirements.txt
