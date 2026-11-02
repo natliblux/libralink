@@ -129,7 +129,7 @@ def search(payload: SearchRequest):
     return {
         "unique": len(results) == 1,
         "results": len(results),
-        "data": results
+        "authorities": results
     }
 
 def main() -> None:
