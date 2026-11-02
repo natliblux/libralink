@@ -134,7 +134,7 @@ def search(payload: SearchRequest):
 
 def main() -> None:
 
-    uvicorn.run(app, host="127.0.0.1", port=ct.API_PORT+1)
+    uvicorn.run(app, host="127.0.0.1", port=ct.API_PORT)
 
 if __name__ == "__main__":
     main()
