@@ -193,11 +193,11 @@ def handle_authorities(authorities: list[Authority], conn: sqlite3.Connection, e
         for doc in documents:
             jsonl_file.write(json.dumps(doc, ensure_ascii=False) + "\n")
 
-def preproc(xml_path: Path, aut_type: str, preferred_field: str, variant_field: str, conn: sqlite3.Connection, elastic: tuple[Elasticsearch, str] | None = None, jsonl_file: TextIO | None = None, normalizer: Callable[[str], str] = normalize, identifier: str | None = None) -> int:
+def start_index(xml_path: Path, aut_type: str, preferred_field: str, variant_field: str, conn: sqlite3.Connection, elastic: tuple[Elasticsearch, str] | None = None, jsonl_file: TextIO | None = None, normalizer: Callable[[str], str] = normalize, identifier: str | None = None) -> int:
 
     count = 0
 
-    with open(xml_path, "rb") as f, tqdm(total=xml_path.stat().st_size, unit="B", unit_scale=True, desc="preprocessing") as progress:
+    with open(xml_path, "rb") as f, tqdm(total=xml_path.stat().st_size, unit="B", unit_scale=True, desc="indexing") as progress:
 
         context = ET.iterparse(f, events=("start", "end"))
         _, root = next(context)
@@ -210,7 +210,7 @@ def preproc(xml_path: Path, aut_type: str, preferred_field: str, variant_field: 
                     root.clear()
                     progress.update(f.tell() - progress.n)
 
-        for batch in batched(authorities(), ct.PREPROC_BATCH_SIZE):
+        for batch in batched(authorities(), ct.INDEXING_BATCH_SIZE):
             handle_authorities(batch, conn, elastic, jsonl_file)
             count += len(batch)
 
@@ -240,14 +240,14 @@ def print_statistics(conn: sqlite3.Connection, aut_type: str, processed: int) ->
 
 def parse_args() -> Namespace:
 
-    parser = argparse.ArgumentParser(description="Preprocess MARC authority records")
+    parser = argparse.ArgumentParser(description="Indexes MARC authority records")
     parser.add_argument("-x", "--xml", type=Path, required=True, help="input xml file")
     parser.add_argument("-t", "--type", required=True, help='authority type (e.g. "person")')
     parser.add_argument("-p", "--preferred", required=True, help="marc field that contains the preferred form")
     parser.add_argument("-v", "--variants", required=True, help="marc field that contains variants")
     parser.add_argument("-e", "--elastic", help="optional elasticsearch url including index")
     parser.add_argument("-j", "--jsonl", type=Path, help="optional jsonl output file")
-    parser.add_argument("-c", "--clear", action="store_true", help="clear existing data before preprocessing")
+    parser.add_argument("-c", "--clear", action="store_true", help="clear existing data before indexing")
     args = parser.parse_args()
 
     if not args.xml.is_file():
@@ -298,7 +298,7 @@ def run(args: Namespace) -> None:
 
         elastic = (es, args.elastic[1]) if es is not None else None
 
-        processed = preproc(args.xml, args.type, args.preferred, args.variants, conn, elastic, jsonl_file, normalizer, identifier)
+        processed = start_index(args.xml, args.type, args.preferred, args.variants, conn, elastic, jsonl_file, normalizer, identifier)
         create_indexes(conn)
         print_statistics(conn, args.type, processed)
 
