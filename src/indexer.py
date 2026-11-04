@@ -205,7 +205,9 @@ def start_index(xml_path: Path, aut_type: str, preferred_field: str, variant_fie
         def authorities() -> Iterator[Authority]:
 
             for event, element in context:
-                if event == "end" and element.tag == "record":
+                if event == "end" and element.tag.rsplit("}", 1)[-1] == "record":
+                    for child in element.iter():
+                        child.tag = child.tag.rsplit("}", 1)[-1]
                     yield from get_authorities(element, aut_type, preferred_field, variant_field, normalizer, identifier)
                     root.clear()
                     progress.update(f.tell() - progress.n)
