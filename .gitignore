@@ -4,3 +4,4 @@ test.rest
 authorities.db
 data/
 .venv/
+instructions.md
